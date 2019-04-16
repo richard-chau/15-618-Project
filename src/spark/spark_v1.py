@@ -15,6 +15,7 @@ num_factors = 100
 num_iterations = 50
 beta = 0.8
 lamda = 1.0
+samplingCnt = 100
 inputV_filepath = "/home/jingguaz/FinalProject/data/ml-100k/ua.base"#"./nf_subsample.csv"
 outputW_filepath = "./W.csv"
 outputH_filepath = "./H.csv"
@@ -23,6 +24,7 @@ conf.set("spark.default.parallelism", str(num_workers))
 conf.setMaster('local[{}]'.format(num_workers))
 
 sc = SparkContext(conf=conf)
+
 
 lines = sc.textFile(inputV_filepath)
 lines = lines.map(lambda l: (l.split("\t")[:-1])) #movieslens
@@ -51,7 +53,8 @@ H_subs = np.array_split(H, num_workers, axis=1)
 print(len(W_subs), len(H_subs), W_subs[0].shape, H_subs[0].shape)
 V_subs_ = np.array_split(V, num_workers)
 
-def updateParameter(tup):
+
+def updateParameter(tup, n):
     idx, mat = tup[0], tup[1]
     W_sub = tup[2]#W_subs[idx]
     H_sub = tup[3]#H_subs[idx]
@@ -60,7 +63,7 @@ def updateParameter(tup):
     
     spIdx = np.nonzero(mat)
     spLen = spIdx[0].shape[0]
-    samplingCnt = 3
+    samplingCnt = 100
     #print(spIdx, spLen, idx, mat.sum())
     if (spLen == 0):
         return idx, (W_sub_grad, H_sub_grad)
@@ -69,9 +72,11 @@ def updateParameter(tup):
     lamda = 1
     r, c = 0, 0
     #print(sampling)
-    for i in sampling:
+    for cnt, i in enumerate(sampling):
         r, c = spIdx[0][i], spIdx[1][i]
         #print(r, c, spLen)
+        #lr = min(0.01, (1 + n + cnt) ** (-beta))
+        lr = (100 + n + cnt) ** (-beta)
         tmp = np.dot(W_sub[r, :], H_sub[:, c])
         inner = mat[r][c] - tmp
         W_sub_grad[r, :] -= lr * (-2.0*(inner)*H_sub[:, c] + 
@@ -81,7 +86,7 @@ def updateParameter(tup):
     #return idx, (W_sub_grad, H_sub_grad), (W_sub_grad.sum(), H_sub_grad.sum(), W_sub.shape, H_sub.shape, spLen, c, W_sub[r, :])
     return idx, (W_sub_grad, H_sub_grad)
 
-def train_one():
+def train_one(itr):
     strata = np.random.permutation(num_workers)
     #V_subs = sc.parallelize(zip(np.arange(num_workers), 
     #                        np.array_split(V, num_workers), W_subs, H_subs))
@@ -94,13 +99,14 @@ def train_one():
     lambda x: (x[0], 
                np.array_split(x[1], num_workers, axis=1)[strata[x[0]]], x[2], x[3]))
     
-    tup = V_subs_subs.map(updateParameter)
+    n = itr * num_workers * samplingCnt
+    tup = V_subs_subs.map(lambda x: updateParameter(x, n))
     tup = tup.collect()
     for i in range(len(tup)):
         W_subs[tup[i][0]] += tup[i][1][0]
         H_subs[strata[tup[i][0]]] += tup[i][1][1]
-    print("Total Loss:", (V - np.dot(np.concatenate(W_subs, axis=0), np.concatenate(H_subs, axis=1))).sum())
+    print("Total Loss at Iter {}:".format(itr), (V - np.dot(np.concatenate(W_subs, axis=0), np.concatenate(H_subs, axis=1))).sum())
     
 
 for i in range(1000):
-    train_one()
+    train_one(i)
