@@ -15,7 +15,7 @@ num_factors = 100
 num_iterations = 50
 beta = 0.8
 lamda = 1.0
-samplingCnt = 100
+samplingCnt = 1000
 inputV_filepath = "/home/jingguaz/FinalProject/data/ml-100k/ua.base"#"./nf_subsample.csv"
 outputW_filepath = "./W.csv"
 outputH_filepath = "./H.csv"
@@ -63,7 +63,7 @@ def updateParameter(tup, n):
     
     spIdx = np.nonzero(mat)
     spLen = spIdx[0].shape[0]
-    samplingCnt = 100
+    #samplingCnt = 100
     #print(spIdx, spLen, idx, mat.sum())
     if (spLen == 0):
         return idx, (W_sub_grad, H_sub_grad)
@@ -80,9 +80,9 @@ def updateParameter(tup, n):
         tmp = np.dot(W_sub[r, :], H_sub[:, c])
         inner = mat[r][c] - tmp
         W_sub_grad[r, :] -= lr * (-2.0*(inner)*H_sub[:, c] + 
-                                 2.0 * lamda * W_sub[r, :].T / W_sub.shape[1]).T
+                                 2.0 * lamda * W_sub[r, :].T / samplingCnt).T # W_sub.shape[1]).T
         H_sub_grad[:, c] -= lr * (-2.0*(inner)*W_sub[r, :].T +
-                               2.0 * lamda * H_sub[:, c] / H_sub.shape[0])
+                               2.0 * lamda * H_sub[:, c] / samplingCnt) # H_sub.shape[0])
     #return idx, (W_sub_grad, H_sub_grad), (W_sub_grad.sum(), H_sub_grad.sum(), W_sub.shape, H_sub.shape, spLen, c, W_sub[r, :])
     return idx, (W_sub_grad, H_sub_grad)
 
@@ -105,8 +105,9 @@ def train_one(itr):
     for i in range(len(tup)):
         W_subs[tup[i][0]] += tup[i][1][0]
         H_subs[strata[tup[i][0]]] += tup[i][1][1]
-    print("Total Loss at Iter {}:".format(itr), (V - np.dot(np.concatenate(W_subs, axis=0), np.concatenate(H_subs, axis=1))).sum())
-    
+    #print("Total Loss at Iter {}:".format(itr), (V - np.dot(np.concatenate(W_subs, axis=0), np.concatenate(H_subs, axis=1))).sum())
+    print("Total Loss at Iter {}, lr = {}:".format(itr, (100 + n) ** (-beta)), (V - np.dot(np.concatenate(W_subs, axis=0), np.concatenate(H_subs, axis=1))).sum())
+
 
 for i in range(1000):
     train_one(i)
