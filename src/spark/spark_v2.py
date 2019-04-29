@@ -10,13 +10,24 @@ conf = SparkConf()
 #conf.set("spark.executor.cores", "4")
 #conf.set("spark.serializer", "org.apache.spark.serializer.KryoSerializer")
 
-num_workers = 9
+num_workers = 10
 num_factors = 100
 num_iterations = 50
 beta = 0.8
 lamda = 1.0
 samplingCnt = 100
-inputV_filepath = "/home/jingguaz/FinalProject/data/ml-100k/ua.base"#"./nf_subsample.csv"
+
+dataset_type = "10M"
+inputV_filepath = None
+test_inputV_filepath = None
+
+if dataset_type == '100k':
+    inputV_filepath = "/home/jingguaz/FinalProject/data/ml-100k/ua.base"#"./nf_subsample.csv"
+    test_inputV_filepath = "/home/jingguaz/FinalProject/data/ml-100k/ua.test"
+elif dataset_type == '10M':
+    inputV_filepath = "/home/jingguaz/sgd/movielens/data/train_shuffle.dat"
+    test_inputV_filepath = "/home/jingguaz/sgd/movielens/data/test_shuffle.dat"
+
 outputW_filepath = "./W.csv"
 outputH_filepath = "./H.csv"
 
@@ -28,8 +39,12 @@ sc = SparkContext(conf=conf)
 
 import numpy as np
 import math
+
 def parsing(line):
-    line = line.split("\t")
+    if dataset_type == "100k":
+        line = line.split("\t")
+    if dataset_type == "10M":
+        line = line.split("::")
     return [int(line[0])-1, int(line[1])-1, float(line[2])] # start from 0
 
 lines = sc.textFile(inputV_filepath)
@@ -53,6 +68,12 @@ W = lines.map(lambda x: (x[0], 1)).reduceByKey(lambda x, y: x+y).map(lambda x: (
                                                     
 V = lines.keyBy(lambda x: int(x[0] / blockUsers)).partitionBy(num_workers).persist() #(node, (user, movie, rate))
 lines.unpersist()
+
+test_lines = sc.textFile(test_inputV_filepath).map(lambda x: parsing(x))
+test_totalData = test_lines.count()
+test_V = test_lines.keyBy(lambda x: int(x[0] / blockUsers)).partitionBy(num_workers).persist() #(node, (user, movie, rate))
+
+
 
 def updateParameter(tup, n):
     #tup = list(tup_iter)#(tup_iter.collect()) 
@@ -144,9 +165,10 @@ def computeError(tup):
     Nj, Hj = H_broad.value[m]
     tmp = np.dot(Wi, Hj)[0][0]
     inner = r - tmp
-    err_sub += inner#(inner**2)
-    #err_sub += inner**2
+    #err_sub += inner#(inner**2)
+    err_sub += inner**2
     return err_sub
+
 
 
 #%pdb
@@ -188,12 +210,12 @@ def train_one(itr):
     H_broad = sc.broadcast(H.collectAsMap())
     #print(V.first()) #(0, [0, 0, 5.0])
     err_total = V.map(computeError).reduce(lambda x,y: x+y)
+    err_test = test_V.map(computeError).reduce(lambda x,y: x+y)
     
-    
-    iter_n = iter_n + totalData
+    #iter_n = iter_n + totalData
+    iter_n = iter_n + itr
     #iter_n = iter_n + num_workers * 100
     #W_subs.collect()
-    print("Total Loss at Iter {}, lr = {}:".format(itr, (100 + iter_n) ** (-beta)), err, err_total)#/totalData)
+    print("Total Loss at Iter {}, lr = {}:".format(itr, (100 + iter_n) ** (-beta)), err, err_total/totalData, err_test/test_totalData)
+    #print("Total Loss at Iter {}, lr = {}:".format(itr, (100 + iter_n) ** (-beta)), err, err_total/totalData)
 
-for i in range(100):
-    train_one(i)
