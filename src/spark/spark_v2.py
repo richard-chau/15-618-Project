@@ -4,17 +4,16 @@ findspark.init("/home/jingguaz/jingguang/bin/spark")
 import pyspark
 from pyspark import SparkConf, SparkContext
 
-%matplotlib inline
 import matplotlib.pyplot as plt
 
 conf = SparkConf()
 #conf.set("spark.executor.memory", "6G")
-#conf.set("spark.driver.memory", "2G")
+conf.set("spark.driver.memory", '32G')#"2G")
 #conf.set("spark.executor.cores", "4")
-#conf.set("spark.serializer", "org.apache.spark.serializer.KryoSerializer")
+conf.set("spark.serializer", "org.apache.spark.serializer.KryoSerializer")
 
-num_workers = 16
-num_factors = 5#100
+num_workers = 24
+num_factors = 100
 num_iterations = 50
 beta = 0.8
 lamda = 1.0#0.02#1.0
@@ -51,19 +50,10 @@ def parsing(line):
         line = line.split("::")
     return [int(line[0])-1, int(line[1])-1, float(line[2])] # start from 0
 
-lines = sc.textFile(inputV_filepath)
+lines = sc.textFile(inputV_filepath, num_workers)
 lines = lines.map(lambda x: parsing(x)).persist()
 
 
-def parsing(line):
-    if dataset_type == "100k":
-        line = line.split("\t")
-    if dataset_type == "10M":
-        line = line.split("::")
-    return [int(line[0])-1, int(line[1])-1, float(line[2])] # start from 0
-
-lines = sc.textFile(inputV_filepath)
-lines = lines.map(lambda x: parsing(x)).persist()
 
 numUsers = lines.max(lambda x :x[0])[0] + 1 #['943', '2', '5']
 numMovies = lines.max(lambda x :x[1])[1] + 1
@@ -137,7 +127,6 @@ def updateParameter1(tup, n):
                                      2.0 * lamda * Wi.T / Ni).T # W_sub.shape[1]).T
             Hj -= lr * (-2.0*(inner)*Wi.T +
                                    2.0 * lamda * Hj / Nj) # H_sub.shape[0])
-            '''
             Wdict[u] = (Ni, Wi)
             Hdict[m] = (Nj, Hj)
             newinner = r - np.dot(Wi, Hj)
@@ -155,7 +144,7 @@ def updateParameter1(tup, n):
             Wdict[k] = (Wdict[k][0], Wdict[k][1] + Wdict_grad[k])
         for k, v in Hdict_grad.items():
             Hdict[k] = (Hdict[k][0], Hdict[k][1] + Hdict_grad[k])
-        
+       ''' 
     
     err_re = 0
     '''
@@ -199,6 +188,7 @@ err_train_list = []
 err_test_list = []
 time_list = []
 iter_list = []
+unpersist_list = []
 
 import time
 
@@ -210,32 +200,36 @@ iter_n = 100
 
 H_broad = None
 W_broad = None
-def train_one(itr):
-    global H, W, H_broad, W_broad
-    global iter_n
+
+#def train_one(itr):
+#    global H, W, H_broad, W_broad
+#    global iter_n
+
+for itr in range(1000):
     
     t_begin = time.process_time()
     strata = np.random.permutation(num_workers)
     V_subs = V.filter(lambda x: strata[int(x[1][1]/blockMovies)] == x[0]) #[node, (user, movie,  vec)]
-    H_subs = H.keyBy( lambda x: strata[int(x[0] / blockMovies)]).partitionBy(num_workers) #[node, (movie, (N, vec))] 
+    H_subs = H.keyBy( lambda x: strata[int(x[0] / blockMovies)])#.partitionBy(num_workers) #[node, (movie, (N, vec))] 
     #print(W.keys().collect())
-    W_subs = W.keyBy( lambda x: int(x[0] / blockUsers)).partitionBy(num_workers) #[node, (user, (N, vec))] 
+    W_subs = W.keyBy( lambda x: int(x[0] / blockUsers))#.partitionBy(num_workers) #[node, (user, (N, vec))] 
     
     argsInput = V_subs.groupWith(W_subs, H_subs).partitionBy(num_workers)
     
     argsOutput = argsInput.map(lambda x: updateParameter1(x, iter_n), preservesPartitioning=True).persist() #[node, (Wdict, Hdict)]
-
+    unpersist_list.append(argsOutput)
     #W_subs = argsOutput.map(lambda x: (x[0], x[1][0]))
     #H_subs = argsOutput.map(lambda x: (x[0], x[1][1]))
     #err = argsOutput.map(lambda x: x[1][2]).reduce(lambda x, y: x+y) #for mapPartitions
     #W = argsOutput.map(lambda x: x[0]) #[[(user, (N, vec))]*9] 
-    W = argsOutput.flatMap(lambda x: x[0]).persist()
+    W = argsOutput.flatMap(lambda x: x[0], preservesPartitioning=True)#.persist()
     #H = argsOutput.map(lambda x: x[1]) 
-    H = argsOutput.flatMap(lambda x: x[1]).persist()
+    H = argsOutput.flatMap(lambda x: x[1])#.persist()
     #print(W.collect())
-    
+    #argsOutput.unpersist()
+    #print("Pass Time: total {0:.4f}".format(time.process_time() - t_begin )) 
     if itr % 10 != 0:
-        return
+        continue#return
         
     t_mid = time.process_time() 
     
@@ -243,17 +237,17 @@ def train_one(itr):
     #print(err.collect())
     err = err.reduce(lambda x, y: x+y) #for map
     #err_re = argsOutput.map(lambda x: x[3]).reduce(lambda x, y: x+y)
-    
-    t_mid1 = time.process_time() 
+    #t_mid1 = time.process_time() 
     
     W_broad = sc.broadcast(W.collectAsMap())
     H_broad = sc.broadcast(H.collectAsMap())
-    
-    t_mid2 = time.process_time() 
+    for i in range(len(unpersist_list)):
+        unpersist_list[i].unpersist() 
+    #t_mid2 = time.process_time() 
     #print(V.first()) #(0, [0, 0, 5.0])
     err_total = V.map(computeError).reduce(lambda x,y: x+y)
     
-    t_mid3 = time.process_time() 
+    #t_mid3 = time.process_time() 
     
     err_test = test_V.map(computeError).reduce(lambda x,y: x+y)
     
@@ -271,30 +265,32 @@ def train_one(itr):
     time_list.append(t_mid - t_begin)
     iter_list.append(itr)
     
-    print("Total Loss at Iter {}, lr = {}:".format(itr, (100 + iter_n) ** (-beta)), err[0][0], train_err, test_err)
-    print("Pass Time: total {0:.4f}, {1:.4f}".format(t_mid - t_begin, (t_end - t_mid) ) )
+    print("Total Loss at Iter {}, lr = {}:".format(itr, (100 + iter_n) ** (-beta)), 0, train_err, test_err)
+    #print("Pass Time: total {0:.4f}, {1:.4f}".format(t_mid - t_begin, (time.process_time() - t_begin) ) )
     #print(t_mid1 - t_mid, t_mid2 - t_mid1, t_mid3 - t_mid2, t_end - t_mid3)
     #print("Total Loss at Iter {}, lr = {}:".format(itr, (100 + iter_n) ** (-beta)), err, err_total/totalData)
 
     
-for i in range(100):
-    train_one(i)
+#for i in range(1000):
+#    train_one(i)
     
 def plot_loss_train(fhead):
     plt.plot(iter_list, err_train_list)
     plt.xlabel('epoch')
     plt.ylabel('train_err')
     plt.title(fhead)
-    plt.savefig('train_err.png')
-    plt.show()
+    plt.savefig(fhead+'train_err.png')
+    plt.close()
+    #plt.show()
 
 def plot_loss_test(fhead):
     plt.plot(iter_list, err_test_list)
     plt.xlabel('epoch')
     plt.ylabel('test_err')
     plt.title(fhead)
-    plt.savefig('test_err.png')
-    plt.show()
+    plt.savefig(fhead+'test_err.png')
+    #plt.show()
+    plt.close()
     
 def save_file(head):
     np.save(head+"iter_list.npy", iter_list)
