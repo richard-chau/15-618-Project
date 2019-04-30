@@ -12,15 +12,18 @@ conf.set("spark.driver.memory", '32G')#"2G")
 #conf.set("spark.executor.cores", "4")
 conf.set("spark.serializer", "org.apache.spark.serializer.KryoSerializer")
 
-num_workers = 24
-num_factors = 100
+num_workers = 28#24
+conf.set("spark.executor.cores", str(num_workers))
+
+num_factors = 10#100
 num_iterations = 50
 beta = 0.8
 lamda = 1.0#0.02#1.0
 samplingCnt = 100
 
-dataset_type = "10M"
+#dataset_type = "10M"
 #dataset_type = "100k"
+dataset_type = "100M"
 inputV_filepath = None
 test_inputV_filepath = None
 
@@ -30,7 +33,11 @@ if dataset_type == '100k':
 elif dataset_type == '10M':
     inputV_filepath = "/home/jingguaz/sgd/movielens/data/train_shuffle.dat"
     test_inputV_filepath = "/home/jingguaz/sgd/movielens/data/test_shuffle.dat"
-
+elif dataset_type == '100M':
+    inputV_filepath = "/home/jingguaz/sgd/movielens/netflix/NetflixRatings_train.csv"
+    test_inputV_filepath = "/home/jingguaz/sgd/movielens/netflix/NetflixRatings_test.csv"
+    
+    
 outputW_filepath = "./W.csv"
 outputH_filepath = "./H.csv"
 
@@ -48,9 +55,11 @@ def parsing(line):
         line = line.split("\t")
     if dataset_type == "10M":
         line = line.split("::")
+    if dataset_type == "100M":
+        line = line.split(",")
     return [int(line[0])-1, int(line[1])-1, float(line[2])] # start from 0
 
-lines = sc.textFile(inputV_filepath, num_workers)
+lines = sc.textFile(inputV_filepath, num_workers).repartition(num_workers)
 lines = lines.map(lambda x: parsing(x)).persist()
 
 
@@ -76,7 +85,7 @@ W = lines.map(lambda x: (x[0], 1)).reduceByKey(lambda x, y: x+y).map(lambda x: (
 V = lines.keyBy(lambda x: int(x[0] / blockUsers)).partitionBy(num_workers).persist() #(node, (user, movie, rate))
 lines.unpersist()
 
-test_lines = sc.textFile(test_inputV_filepath).map(lambda x: parsing(x))
+test_lines = sc.textFile(test_inputV_filepath, num_workers).repartition(num_workers).map(lambda x: parsing(x))
 test_totalData = test_lines.count()
 test_V = test_lines.keyBy(lambda x: int(x[0] / blockUsers)).partitionBy(num_workers).persist() #(node, (user, movie, rate))
 
@@ -184,6 +193,31 @@ def computeError(tup):
     return err_sub
 
 
+    
+def plot_loss_train(fhead):
+    plt.plot(iter_list, err_train_list)
+    plt.xlabel('epoch')
+    plt.ylabel('train_err')
+    plt.title(fhead)
+    plt.savefig(fhead+'train_err.png')
+    #plt.close()
+    #plt.show()
+
+def plot_loss_test(fhead):
+    plt.plot(iter_list, err_test_list)
+    plt.xlabel('epoch')
+    plt.ylabel('test_err')
+    plt.title(fhead)
+    plt.savefig(fhead+'test_err.png')
+    #plt.show()
+    #plt.close()
+    
+def save_file(head):
+    np.save(head+"iter_list.npy", iter_list)
+    np.save(head+"err_train_list.npy", err_train_list)
+    np.save(head+"err_test_list.npy", err_test_list)
+    np.save(head+"time_list.npy", time_list)
+
 err_train_list = []
 err_test_list = []
 time_list = []
@@ -233,9 +267,9 @@ for itr in range(1000):
         
     t_mid = time.process_time() 
     
-    err = argsOutput.map(lambda x: x[2])
+    ####err = argsOutput.map(lambda x: x[2])
     #print(err.collect())
-    err = err.reduce(lambda x, y: x+y) #for map
+    ####err = err.reduce(lambda x, y: x+y) #for map
     #err_re = argsOutput.map(lambda x: x[3]).reduce(lambda x, y: x+y)
     #t_mid1 = time.process_time() 
     
@@ -264,7 +298,12 @@ for itr in range(1000):
     err_test_list.append(test_err)
     time_list.append(t_mid - t_begin)
     iter_list.append(itr)
-    
+
+    fhead = dataset_type + "_" + str(num_workers) + "workers_"
+    #plot_loss_train(fhead)
+    #plot_loss_test(fhead)
+    save_file(fhead) 
+
     print("Total Loss at Iter {}, lr = {}:".format(itr, (100 + iter_n) ** (-beta)), 0, train_err, test_err)
     #print("Pass Time: total {0:.4f}, {1:.4f}".format(t_mid - t_begin, (time.process_time() - t_begin) ) )
     #print(t_mid1 - t_mid, t_mid2 - t_mid1, t_mid3 - t_mid2, t_end - t_mid3)
@@ -273,32 +312,7 @@ for itr in range(1000):
     
 #for i in range(1000):
 #    train_one(i)
-    
-def plot_loss_train(fhead):
-    plt.plot(iter_list, err_train_list)
-    plt.xlabel('epoch')
-    plt.ylabel('train_err')
-    plt.title(fhead)
-    plt.savefig(fhead+'train_err.png')
-    plt.close()
-    #plt.show()
-
-def plot_loss_test(fhead):
-    plt.plot(iter_list, err_test_list)
-    plt.xlabel('epoch')
-    plt.ylabel('test_err')
-    plt.title(fhead)
-    plt.savefig(fhead+'test_err.png')
-    #plt.show()
-    plt.close()
-    
-def save_file(head):
-    np.save(head+"iter_list.npy", iter_list)
-    np.save(head+"err_train_list.npy", err_train_list)
-    np.save(head+"err_test_list.npy", err_test_list)
-    np.save(head+"time_list.npy", time_list)
-
-fhead = "10M_" + str(num_workers) + "workers_"
+fhead = dataset_type + "_" + str(num_workers) + "workers_"
 plot_loss_train(fhead)
 plot_loss_test(fhead)
 save_file(fhead)
