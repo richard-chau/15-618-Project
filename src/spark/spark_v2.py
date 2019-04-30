@@ -4,8 +4,8 @@ findspark.init("/home/jingguaz/jingguang/bin/spark")
 import pyspark
 from pyspark import SparkConf, SparkContext
 
-import math
-
+%matplotlib inline
+import matplotlib.pyplot as plt
 
 conf = SparkConf()
 #conf.set("spark.executor.memory", "6G")
@@ -21,7 +21,7 @@ lamda = 1.0#0.02#1.0
 samplingCnt = 100
 
 dataset_type = "10M"
-dataset_type = "100k"
+#dataset_type = "100k"
 inputV_filepath = None
 test_inputV_filepath = None
 
@@ -39,6 +39,20 @@ conf.set("spark.default.parallelism", str(num_workers))
 conf.setMaster('local[{}]'.format(num_workers))
 
 sc = SparkContext(conf=conf)
+
+
+import numpy as np
+import math
+
+def parsing(line):
+    if dataset_type == "100k":
+        line = line.split("\t")
+    if dataset_type == "10M":
+        line = line.split("::")
+    return [int(line[0])-1, int(line[1])-1, float(line[2])] # start from 0
+
+lines = sc.textFile(inputV_filepath)
+lines = lines.map(lambda x: parsing(x)).persist()
 
 
 def parsing(line):
@@ -76,7 +90,6 @@ test_lines = sc.textFile(test_inputV_filepath).map(lambda x: parsing(x))
 test_totalData = test_lines.count()
 test_V = test_lines.keyBy(lambda x: int(x[0] / blockUsers)).partitionBy(num_workers).persist() #(node, (user, movie, rate))
 
-
 dummy = 1
 print(dummy)
 def updateParameter1(tup, n):
@@ -107,7 +120,6 @@ def updateParameter1(tup, n):
     if len(V_sub) != 0:
         sampling = np.random.choice(len(V_sub), 100)
 
-
         for cnt, item in enumerate(V_sub):
         #for cnt, s in enumerate(sampling):
         #    item = V_sub[s]
@@ -118,13 +130,14 @@ def updateParameter1(tup, n):
             tmp = np.dot(Wi, Hj)
             inner = (r - tmp)
             #err += inner
-            lr = 0.0001
+            lr = 0.001
             #lr = (100 + 10*n) ** (-beta)
             #lr = (100 + n + cnt) ** (-beta)
             Wi -= lr * (-2.0*(inner)*Hj + 
                                      2.0 * lamda * Wi.T / Ni).T # W_sub.shape[1]).T
             Hj -= lr * (-2.0*(inner)*Wi.T +
                                    2.0 * lamda * Hj / Nj) # H_sub.shape[0])
+            '''
             Wdict[u] = (Ni, Wi)
             Hdict[m] = (Nj, Hj)
             newinner = r - np.dot(Wi, Hj)
@@ -142,7 +155,7 @@ def updateParameter1(tup, n):
             Wdict[k] = (Wdict[k][0], Wdict[k][1] + Wdict_grad[k])
         for k, v in Hdict_grad.items():
             Hdict[k] = (Hdict[k][0], Hdict[k][1] + Hdict_grad[k])
-        '''
+        
     
     err_re = 0
     '''
@@ -170,6 +183,7 @@ def computeError(tup):
     if u not in W_broad.value or m not in H_broad.value:
         Wi = np.random.normal(0, 0.5*scale, (num_factors, 1))
         Hj = np.random.normal(0, 0.5*scale, (1, num_factors))
+        return 0
     else:
         Ni, Wi = W_broad.value[u]
         Nj, Hj = H_broad.value[m]
@@ -177,8 +191,14 @@ def computeError(tup):
     inner = r - tmp
     #err_sub += inner#(inner**2)
     err_sub += inner**2
-    return err_sub ** (1./2)
+    #return err_sub ** (1./2)
+    return err_sub
 
+
+err_train_list = []
+err_test_list = []
+time_list = []
+iter_list = []
 
 import time
 
@@ -214,6 +234,9 @@ def train_one(itr):
     H = argsOutput.flatMap(lambda x: x[1]).persist()
     #print(W.collect())
     
+    if itr % 10 != 0:
+        return
+        
     t_mid = time.process_time() 
     
     err = argsOutput.map(lambda x: x[2])
@@ -240,8 +263,15 @@ def train_one(itr):
     iter_n = iter_n + itr
     #iter_n = iter_n + num_workers * 100
     #W_subs.collect()
-   
-    print("Total Loss at Iter {}, lr = {}:".format(itr, (100 + iter_n) ** (-beta)), err[0][0], err_total/totalData, err_test/test_totalData)
+    
+    train_err = (err_total/totalData)** (1./2)
+    test_err =  (err_test/test_totalData)** (1./2)
+    err_train_list.append(train_err)
+    err_test_list.append(test_err)
+    time_list.append(t_mid - t_begin)
+    iter_list.append(itr)
+    
+    print("Total Loss at Iter {}, lr = {}:".format(itr, (100 + iter_n) ** (-beta)), err[0][0], train_err, test_err)
     print("Pass Time: total {0:.4f}, {1:.4f}".format(t_mid - t_begin, (t_end - t_mid) ) )
     #print(t_mid1 - t_mid, t_mid2 - t_mid1, t_mid3 - t_mid2, t_end - t_mid3)
     #print("Total Loss at Iter {}, lr = {}:".format(itr, (100 + iter_n) ** (-beta)), err, err_total/totalData)
@@ -249,3 +279,30 @@ def train_one(itr):
     
 for i in range(100):
     train_one(i)
+    
+def plot_loss_train(fhead):
+    plt.plot(iter_list, err_train_list)
+    plt.xlabel('epoch')
+    plt.ylabel('train_err')
+    plt.title(fhead)
+    plt.savefig('train_err.png')
+    plt.show()
+
+def plot_loss_test(fhead):
+    plt.plot(iter_list, err_test_list)
+    plt.xlabel('epoch')
+    plt.ylabel('test_err')
+    plt.title(fhead)
+    plt.savefig('test_err.png')
+    plt.show()
+    
+def save_file(head):
+    np.save(head+"iter_list.npy", iter_list)
+    np.save(head+"err_train_list.npy", err_train_list)
+    np.save(head+"err_test_list.npy", err_test_list)
+    np.save(head+"time_list.npy", time_list)
+
+fhead = "10M_" + str(num_workers) + "workers_"
+plot_loss_train(fhead)
+plot_loss_test(fhead)
+save_file(fhead)
